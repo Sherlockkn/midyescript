@@ -224,7 +224,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -110, 1, 0)
 titleLabel.Position = UDim2.new(0, 18, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "⚡ MIDYE SCRIPT - MERTE GOTTEN"
+titleLabel.Text = "⚡ MIDYE SCRIPT v2"
 titleLabel.TextColor3 = Color3.fromRGB(201, 209, 217)
 titleLabel.TextSize = 20
 titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
@@ -947,7 +947,7 @@ settingsContainer.Parent = rightSection
 local settingsData = {
     {Label = "⚡ Uçuş Hızı:", Default = "120"},
     {Label = "🏃 Koşu Hızı:", Default = "16"},
-    {Label = "📊 DataLimit (KBPS):", Default = "1"},
+    {Label = "📊 DLim:", Default = "1"},
 }
 
 local controls = {}
@@ -1440,7 +1440,9 @@ end)
 -- Hız ayarları
 local flySpeedBox = controls["⚡ Uçuş Hızı:"]
 local walkSpeedBox = controls["🏃 Koşu Hızı:"]
-local dataLimitBox = controls["📊 DataLimit (KBPS):"]
+local dataLimitBox = controls["📊 DLim:"]
+
+-- En son ekledigimiz DataLimit KBPS
 
 flySpeedBox.FocusLost:Connect(function(enterPressed)
     local newSpeed = tonumber(flySpeedBox.Text)
@@ -1518,7 +1520,7 @@ minimizeBtn.MouseButton1Click:Connect(function()
         rightSection.Visible = false
         resizeHandle.Visible = false
         bottomHandle.Visible = false
-        titleLabel.Text = "⚡ MIDYE"
+        titleLabel.Text = "⚡ MIDYE SCRIPT"
         mainFrame.ClipsDescendants = true
 
         local sizeTween = TweenService:Create(mainFrame, tweenInfo, {Size = UDim2.new(0, 220, 0, 40)})
