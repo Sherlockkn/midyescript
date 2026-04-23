@@ -107,19 +107,27 @@ local function hookHover(btn, normal, hover, dur)
     end)
 end
 
--- Toggle butonları için dinamik hover — o anki rengi baz alır, MouseLeave'de toggle rengi korunur
+-- Toggle butonları için dinamik hover — dış currentColor tablosunu baz alır
+local btnCurrentColor = {}
+
 local function hookToggleHover(btn, dur)
     dur = dur or 0.18
-    local baseColor = btn.BackgroundColor3
+    btnCurrentColor[btn] = btn.BackgroundColor3
     btn.MouseEnter:Connect(function()
-        baseColor = btn.BackgroundColor3
+        local base = btnCurrentColor[btn] or btn.BackgroundColor3
         tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-              {BackgroundColor3 = baseColor:Lerp(Color3.fromRGB(255,255,255), 0.18)})
+              {BackgroundColor3 = base:Lerp(Color3.fromRGB(255,255,255), 0.18)})
     end)
     btn.MouseLeave:Connect(function()
+        local base = btnCurrentColor[btn] or btn.BackgroundColor3
         tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-              {BackgroundColor3 = baseColor})
+              {BackgroundColor3 = base})
     end)
+end
+
+local function setToggleColor(btn, col)
+    btnCurrentColor[btn] = col
+    tween(btn, EASE_FAST, {BackgroundColor3 = col})
 end
 
 -- Basma "sıkışma" efekti
@@ -156,7 +164,28 @@ keyFrame.ZIndex = 2
 keyFrame.Parent = keyGui
 addCorner(keyFrame, 18)
 
-local kfStroke = addStroke(keyFrame, C.BORDER, 1.5)
+local kfStroke = addStroke(keyFrame, C.BORDER, 3)
+
+-- Dönen rainbow stroke rengi
+task.spawn(function()
+    local t = 0
+    local colors = {
+        Color3.fromRGB(120, 120, 255),  -- parlak indigo
+        Color3.fromRGB(160,  80, 255),  -- parlak violet
+        Color3.fromRGB(220,  80, 220),  -- parlak pink
+        Color3.fromRGB( 80, 180, 255),  -- parlak sky blue
+        Color3.fromRGB( 80, 220, 200),  -- teal
+        Color3.fromRGB(120, 120, 255),  -- parlak indigo (döngü)
+    }
+    while kfStroke and kfStroke.Parent do
+        t = t + task.wait(0.03)
+        local cycle = (t * 0.6) % (#colors - 1)
+        local idx   = math.floor(cycle) + 1
+        local next  = idx + 1
+        local alpha = cycle - math.floor(cycle)
+        kfStroke.Color = colors[idx]:Lerp(colors[next], alpha)
+    end
+end)
 
 -- İnce üst çizgi (renk şeridi)
 local keyAccentBar = Instance.new("Frame")
@@ -336,12 +365,13 @@ task.spawn(function()
         TextTransparency = 0,
         Position = UDim2.new(0, 10, 0, 55),
     })
-    -- Stroke hafif pulse
-    task.wait(0.1)
-    pulseStroke(kfStroke, C.BORDER, C.ACCENT, 3)
 end)
 
+local failCount  = 0
+local inCooldown = false
+
 local function tryKey()
+    if inCooldown then return end
     local entered = keyBox.Text
     if VALID_KEYS[entered] then
         -- Başarı: yeşil flash + dissolve
@@ -352,27 +382,53 @@ local function tryKey()
         keyGui:Destroy()
         loadMainScript()
     else
-        keyError.Text = "❌ Geçersiz key!"
-        keyError.Visible = true
-        keyEnterBtn.Visible = false
+        failCount = failCount + 1
+        keyBox.Text = ""
         tween(kbStroke, EASE_FAST, {Color = C.RED})
+
         -- Sarsma animasyonu
         local origPos = keyBox.Position
-        local function shake(dx)
-            tween(keyBox, TweenInfo.new(0.05, Enum.EasingStyle.Linear),
-                  {Position = origPos + UDim2.new(0, dx, 0, 0)})
-        end
         task.spawn(function()
             for _, dx in ipairs({8,-8,6,-6,4,-4,0}) do
-                shake(dx) task.wait(0.05)
+                tween(keyBox, TweenInfo.new(0.05, Enum.EasingStyle.Linear),
+                      {Position = origPos + UDim2.new(0, dx, 0, 0)})
+                task.wait(0.05)
             end
         end)
-        keyBox.Text = ""
-        task.delay(2, function()
-            keyError.Visible = false
-            keyEnterBtn.Visible = true
-            tween(kbStroke, EASE_FAST, {Color = C.BORDER})
-        end)
+
+        if failCount >= 3 then
+            failCount = 0
+            inCooldown = true
+            keyEnterBtn.Visible = false
+            keyBox.TextEditable = false
+            keyError.Visible = true
+
+            -- 15 saniye geri sayım
+            local remaining = 15
+            keyError.Text = "⏳ " .. remaining .. "s bekle"
+            task.spawn(function()
+                while remaining > 0 do
+                    task.wait(1)
+                    remaining = remaining - 1
+                    keyError.Text = remaining > 0 and ("⏳ " .. remaining .. "s bekle") or ""
+                end
+                inCooldown = false
+                keyEnterBtn.Visible = true
+                keyBox.TextEditable = true
+                keyError.Visible = false
+                tween(kbStroke, EASE_FAST, {Color = C.BORDER})
+            end)
+        else
+            keyError.Text = "❌ Geçersiz key!"
+            keyError.Visible = true
+            keyEnterBtn.Visible = false
+            task.delay(2, function()
+                if inCooldown then return end
+                keyError.Visible = false
+                keyEnterBtn.Visible = true
+                tween(kbStroke, EASE_FAST, {Color = C.BORDER})
+            end)
+        end
     end
 end
 
@@ -1149,8 +1205,8 @@ addStroke(manualTPBtn, C.ACCENT, 1, 0.4)
 hookHover(manualTPBtn, C.BLUE, C.BLUE_H)
 hookPress(manualTPBtn)
 
-hookHover(viewBtn,   C.GREEN, C.GREEN_H)
-hookHover(autoTPBtn, C.GREEN, C.GREEN_H)
+hookToggleHover(viewBtn)
+hookToggleHover(autoTPBtn)
 
 -- ── Sağ bölüm ──────────────────────────────────────────────────────────────
 local rightSection = Instance.new("Frame")
@@ -1302,7 +1358,7 @@ local function toggleView()
     viewEnabled = not viewEnabled
     viewBtn.Text = viewEnabled and "👁️ VIEW AÇIK" or "👁️ VIEW KAPALI"
     local col = viewEnabled and C.RED or C.GREEN
-    tween(viewBtn, EASE_FAST, {BackgroundColor3 = col})
+    setToggleColor(viewBtn, col)
     applyView()
 end
 
@@ -1310,7 +1366,7 @@ local function toggleAutoTP()
     autoTPEnabled = not autoTPEnabled
     autoTPBtn.Text = autoTPEnabled and "⚡ AUTO TP AÇIK" or "⚡ AUTO TP KAPALI"
     local col = autoTPEnabled and C.RED or C.GREEN
-    tween(autoTPBtn, EASE_FAST, {BackgroundColor3 = col})
+    setToggleColor(autoTPBtn, col)
     if autoTPEnabled then
         autoTPConnection = RunService.Heartbeat:Connect(function()
             if not autoTPEnabled or not selectedPlayer or not selectedPlayer.Character or not localPlayer.Character then return end
@@ -1447,7 +1503,7 @@ local function toggleESP()
     local espBtn = cheatButtons["🔍 ESP KAPALI"]
     espBtn.Text = espEnabled and "🔍 ESP AÇIK" or "🔍 ESP KAPALI"
     local col = espEnabled and C.RED or C.GREEN
-    tween(espBtn, EASE_FAST, {BackgroundColor3 = col})
+    setToggleColor(espBtn, col)
     if espEnabled then
         for _, plr in ipairs(Players:GetPlayers()) do createESP(plr) end
     else
@@ -1478,7 +1534,7 @@ local function toggleFly()
     if flying then
         flying = false
         flyBtn.Text = "✈️ FLY KAPALI"
-        tween(flyBtn, EASE_FAST, {BackgroundColor3 = C.GREEN})
+        setToggleColor(flyBtn, C.GREEN)
         if bv then bv:Destroy(); bv = nil end
         if bg then bg:Destroy(); bg = nil end
         if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
@@ -1488,7 +1544,7 @@ local function toggleFly()
     else
         flying = true
         flyBtn.Text = "✈️ FLY AÇIK"
-        tween(flyBtn, EASE_FAST, {BackgroundColor3 = C.RED})
+        setToggleColor(flyBtn, C.RED)
 
         -- Humanoid'i dondur (yerçekimi etkisini kes)
         local hum = character and character:FindFirstChildOfClass("Humanoid")
@@ -1507,7 +1563,7 @@ local function toggleFly()
         bv.VectorVelocity = Vector3.new(0, 0, 0)
         bv.Parent = root
 
-        -- AlignOrientation (modern API)
+        -- AlignOrientation (modern API) — sadece yatay yön, takla yok
         local attachCam = Instance.new("Attachment")
         attachCam.Name = "MidyeFlyAttachCam"
         attachCam.Parent = workspace.CurrentCamera
@@ -1518,7 +1574,7 @@ local function toggleFly()
         bg.Attachment1 = attachCam
         bg.MaxTorque = math.huge
         bg.MaxAngularVelocity = math.huge
-        bg.Responsiveness = 200
+        bg.Responsiveness = 50
         bg.Parent = root
 
         flyConnection = RunService.Heartbeat:Connect(function()
@@ -1527,7 +1583,7 @@ local function toggleFly()
             if not root or not root.Parent then
                 flying = false
                 flyBtn.Text = "✈️ FLY KAPALI"
-                tween(flyBtn, EASE_FAST, {BackgroundColor3 = C.GREEN})
+                setToggleColor(flyBtn, C.GREEN)
                 if bv then bv:Destroy(); bv = nil end
                 if bg then bg:Destroy(); bg = nil end
                 if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
@@ -1543,8 +1599,16 @@ local function toggleFly()
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.new(0, 1, 0) end
             if dir.Magnitude > 0 then dir = dir.Unit end
             bv.VectorVelocity = dir * flySpeed
-            -- Kamera yönüne bak
-            attachCam.CFrame = cam.CFrame
+
+            -- Sadece yatay yönü takip et (pitch/roll sıfır) — takla atmayı önler
+            local look = cam.CFrame.LookVector
+            local flatLook = Vector3.new(look.X, 0, look.Z)
+            if flatLook.Magnitude > 0.01 then
+                flatLook = flatLook.Unit
+            else
+                flatLook = Vector3.new(0, 0, -1)
+            end
+            attachCam.CFrame = CFrame.lookAt(Vector3.new(0,0,0), flatLook)
         end)
     end
 end
@@ -1553,7 +1617,7 @@ local function toggleNoclip()
     noclipEnabled = not noclipEnabled
     noclipBtn.Text = noclipEnabled and "👻 NOCLIP AÇIK" or "👻 NOCLIP KAPALI"
     local col = noclipEnabled and C.RED or C.GREEN
-    tween(noclipBtn, EASE_FAST, {BackgroundColor3 = col})
+    setToggleColor(noclipBtn, col)
     if noclipEnabled then
         noclipConnection = RunService.Stepped:Connect(function()
             local char = localPlayer.Character
@@ -1665,7 +1729,7 @@ localPlayer.CharacterAdded:Connect(function(char)
     if flying then
         flying = false
         flyBtn.Text = "✈️ FLY KAPALI"
-        tween(flyBtn, EASE_FAST, {BackgroundColor3 = C.GREEN})
+        setToggleColor(flyBtn, C.GREEN)
         if bv then bv:Destroy(); bv = nil end
         if bg then bg:Destroy(); bg = nil end
         if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
