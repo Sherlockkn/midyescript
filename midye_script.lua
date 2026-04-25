@@ -109,38 +109,159 @@ end
 
 -- Toggle butonları için dinamik hover — dış currentColor tablosunu baz alır
 local btnCurrentColor = {}
+local btnBaseSize     = {}   -- orijinal Size kaydı (hover lift için)
+local btnBasePos      = {}   -- orijinal Position kaydı
+local btnGlowThread   = {}   -- aktif glow loop thread'i
+local btnStrokeRef    = {}   -- her butonun UIStroke referansı
 
-local function hookToggleHover(btn, dur)
-    dur = dur or 0.18
-    btnCurrentColor[btn] = btn.BackgroundColor3
-    btn.MouseEnter:Connect(function()
-        local base = btnCurrentColor[btn] or btn.BackgroundColor3
-        tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-              {BackgroundColor3 = base:Lerp(Color3.fromRGB(255,255,255), 0.18)})
-    end)
-    btn.MouseLeave:Connect(function()
-        local base = btnCurrentColor[btn] or btn.BackgroundColor3
-        tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-              {BackgroundColor3 = base})
+
+
+-- ── Aktif glow pulse (açık durum için sürekli nefes efekti) ─────────────────
+local function startGlowPulse(btn, col)
+    -- Önceki thread'i durdur
+    if btnGlowThread[btn] then
+        task.cancel(btnGlowThread[btn])
+        btnGlowThread[btn] = nil
+    end
+    local stroke = btnStrokeRef[btn]
+    if not stroke then return end
+
+    local bright = col:Lerp(Color3.fromRGB(255,255,255), 0.35)
+    btnGlowThread[btn] = task.spawn(function()
+        local t = 0
+        while btn and btn.Parent and btnGlowThread[btn] do
+            t = t + task.wait(0.05)
+            local alpha = (math.sin(t * math.pi * 0.9) + 1) / 2   -- ~1.8s döngü
+            stroke.Color       = col:Lerp(bright, alpha * 0.7)
+            stroke.Thickness   = 1.5 + alpha * 1.2
+            stroke.Transparency= 0.1 - alpha * 0.08
+        end
     end)
 end
 
+local function stopGlowPulse(btn)
+    if btnGlowThread[btn] then
+        task.cancel(btnGlowThread[btn])
+        btnGlowThread[btn] = nil
+    end
+    local stroke = btnStrokeRef[btn]
+    if stroke then
+        tween(stroke, EASE_FAST, {Color = C.BORDER, Thickness = 1, Transparency = 0.3})
+    end
+end
+
+-- ── Hover: Apple tarzı yumuşak lift + stroke parlaması ──────────────────────
+local function hookToggleHover(btn, dur)
+    dur = dur or 0.2
+    btnCurrentColor[btn] = btn.BackgroundColor3
+    -- Boyut/pozisyon kaydı (ilk çağrıda bir kez al)
+    if not btnBaseSize[btn] then
+        btnBaseSize[btn] = btn.Size
+        btnBasePos[btn]  = btn.Position
+    end
+
+    btn.MouseEnter:Connect(function()
+        local base   = btnCurrentColor[btn] or btn.BackgroundColor3
+        local stroke = btnStrokeRef[btn]
+        -- Renk: hafif aydınlatma
+        tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            BackgroundColor3 = base:Lerp(Color3.fromRGB(255,255,255), 0.13),
+        })
+        -- Stroke parlaması (aktif glow yoksa)
+        if stroke and not btnGlowThread[btn] then
+            tween(stroke, TweenInfo.new(dur, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Color = base:Lerp(Color3.fromRGB(255,255,255), 0.5),
+                Thickness = 2,
+                Transparency = 0,
+            })
+        end
+    end)
+
+    btn.MouseLeave:Connect(function()
+        local base   = btnCurrentColor[btn] or btn.BackgroundColor3
+        local stroke = btnStrokeRef[btn]
+        tween(btn, TweenInfo.new(dur, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            BackgroundColor3 = base,
+        })
+        -- Aktif glow varsa dokunma, yoksa sıfırla
+        if stroke and not btnGlowThread[btn] then
+            tween(stroke, TweenInfo.new(dur, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Color = C.BORDER,
+                Thickness = 1,
+                Transparency = 0.3,
+            })
+        end
+    end)
+end
+
+-- ── Toggle renk geçişi: Apple/Samsung tarzı smooth + glow ───────────────────
 local function setToggleColor(btn, col)
     btnCurrentColor[btn] = col
-    tween(btn, EASE_FAST, {BackgroundColor3 = col})
+
+    -- 1) Renk geçişi — Quint easing, biraz daha uzun (0.28s)
+    tween(btn, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        BackgroundColor3 = col,
+    })
+
+    -- 2) Stroke rengi de geçiş yapsın
+    local stroke = btnStrokeRef[btn]
+    if stroke then
+        tween(stroke, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Color = col:Lerp(Color3.fromRGB(255,255,255), 0.4),
+            Thickness = 2.5,
+            Transparency = 0,
+        })
+    end
+
+    -- 3) Kısa scale pulse (Samsung One UI tarzı "pop")
+    local baseSize = btnBaseSize[btn] or btn.Size
+    local basePos  = btnBasePos[btn]  or btn.Position
+    tween(btn, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Size     = baseSize + UDim2.new(0, 6, 0, 4),
+        Position = basePos  - UDim2.new(0, 3, 0, 2),
+    })
+    task.delay(0.12, function()
+        if btn and btn.Parent then
+            tween(btn, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Size     = baseSize,
+                Position = basePos,
+            })
+        end
+    end)
+
+    -- 4) Aktif (kırmızı = açık) ise glow pulse başlat, değilse durdur
+    if col == C.RED then
+        task.delay(0.15, function()
+            if btn and btn.Parent then startGlowPulse(btn, col) end
+        end)
+    else
+        stopGlowPulse(btn)
+        -- Stroke'u normale döndür (glow durduktan sonra)
+        task.delay(0.3, function()
+            if btn and btn.Parent and stroke then
+                tween(stroke, EASE_FAST, {Color = C.BORDER, Thickness = 1, Transparency = 0.3})
+            end
+        end)
+    end
 end
 
--- Basma "sıkışma" efekti
+-- ── Basma efekti: hafif sıkışma ─────────────────────────────────────────────
 local function hookPress(btn)
     btn.MouseButton1Down:Connect(function()
-        tween(btn, TweenInfo.new(0.08, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-              {Size = btn.Size - UDim2.new(0,4,0,4),
-               Position = btn.Position + UDim2.new(0,2,0,2)})
+        local baseSize = btnBaseSize[btn] or btn.Size
+        local basePos  = btnBasePos[btn]  or btn.Position
+        tween(btn, TweenInfo.new(0.09, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+            Size     = baseSize - UDim2.new(0, 4, 0, 3),
+            Position = basePos  + UDim2.new(0, 2, 0, 1.5),
+        })
     end)
     btn.MouseButton1Up:Connect(function()
-        tween(btn, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-              {Size = btn.Size + UDim2.new(0,4,0,4),   -- geri aslına
-               Position = btn.Position - UDim2.new(0,2,0,2)})
+        local baseSize = btnBaseSize[btn] or btn.Size
+        local basePos  = btnBasePos[btn]  or btn.Position
+        tween(btn, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            Size     = baseSize,
+            Position = basePos,
+        })
     end)
 end
 
@@ -839,7 +960,7 @@ discordLabel.TextTruncate = Enum.TextTruncate.AtEnd
 discordLabel.Font = Enum.Font.Gotham
 discordLabel.AutoButtonColor = false
 discordLabel.ZIndex = 16
-discordLabel.Parent = infoBar
+-- Parent sonra atanacak (sıralama için)
 
 local gunsLabel = Instance.new("TextButton")
 gunsLabel.Size = UDim2.new(0, 0, 1, 0)
@@ -853,7 +974,7 @@ gunsLabel.TextTruncate = Enum.TextTruncate.AtEnd
 gunsLabel.Font = Enum.Font.Gotham
 gunsLabel.AutoButtonColor = false
 gunsLabel.ZIndex = 16
-gunsLabel.Parent = infoBar
+-- Parent sonra atanacak (sıralama için)
 
 -- ── TOAST ──────────────────────────────────────────────────────────────────
 local toastGui = Instance.new("ScreenGui")
@@ -998,6 +1119,327 @@ end)
 gunsLabel.MouseEnter:Connect(function() tween(gunsLabel,EASE_FAST,{TextTransparency=0}) end)
 gunsLabel.MouseLeave:Connect(function() tween(gunsLabel,EASE_FAST,{TextTransparency=0.1}) end)
 
+-- ── Duyurular butonu (infoBar'a eklenir) ────────────────────────────────────
+local duyurularBtn = Instance.new("TextButton")
+duyurularBtn.Size = UDim2.new(0, 0, 1, 0)
+duyurularBtn.AutomaticSize = Enum.AutomaticSize.X
+duyurularBtn.BackgroundTransparency = 1
+duyurularBtn.Text = "📢 duyurular"
+duyurularBtn.TextColor3 = Color3.fromRGB(255, 200, 60)
+duyurularBtn.TextTransparency = 0.1
+duyurularBtn.TextSize = 13
+duyurularBtn.TextTruncate = Enum.TextTruncate.AtEnd
+duyurularBtn.Font = Enum.Font.GothamBold
+duyurularBtn.AutoButtonColor = false
+duyurularBtn.ZIndex = 16
+duyurularBtn.Parent = infoBar
+-- Sıralama: 1. duyurular, 2. gunslol, 3. discord
+gunsLabel.Parent    = infoBar
+discordLabel.Parent = infoBar
+
+duyurularBtn.MouseEnter:Connect(function() tween(duyurularBtn, EASE_FAST, {TextTransparency = 0}) end)
+duyurularBtn.MouseLeave:Connect(function() tween(duyurularBtn, EASE_FAST, {TextTransparency = 0.1}) end)
+
+-- ── Duyurular paneli ────────────────────────────────────────────────────────
+local duyuruGui = Instance.new("ScreenGui")
+duyuruGui.Name = "MidyeDuyurular"
+duyuruGui.ResetOnSpawn = false
+duyuruGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+duyuruGui.Parent = game:GetService("CoreGui")
+
+local duyuruFrame = Instance.new("Frame")
+duyuruFrame.Size = UDim2.new(0, 460, 0, 520)
+duyuruFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+duyuruFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+duyuruFrame.BackgroundColor3 = C.SURFACE
+duyuruFrame.BackgroundTransparency = 1
+duyuruFrame.BorderSizePixel = 0
+duyuruFrame.ZIndex = 200
+duyuruFrame.Visible = false
+duyuruFrame.Parent = duyuruGui
+addCorner(duyuruFrame, 18)
+local dfStroke = addStroke(duyuruFrame, C.BORDER, 1.5)
+
+-- Rainbow stroke (ana panelle aynı efekt)
+task.spawn(function()
+    local t = 0
+    local colors = {
+        Color3.fromRGB(120, 120, 255),
+        Color3.fromRGB(160,  80, 255),
+        Color3.fromRGB(220,  80, 220),
+        Color3.fromRGB( 80, 180, 255),
+        Color3.fromRGB( 80, 220, 200),
+        Color3.fromRGB(120, 120, 255),
+    }
+    while dfStroke and dfStroke.Parent do
+        t = t + task.wait(0.03)
+        local cycle = (t * 0.5) % (#colors - 1)
+        local idx   = math.floor(cycle) + 1
+        local nxt   = idx + 1
+        local alpha = cycle - math.floor(cycle)
+        if dfStroke.Parent then
+            dfStroke.Color = colors[idx]:Lerp(colors[nxt], alpha)
+        end
+    end
+end)
+
+-- Başlık çubuğu
+local duyuruTitleBar = Instance.new("Frame")
+duyuruTitleBar.Size = UDim2.new(1, 0, 0, 48)
+duyuruTitleBar.BackgroundColor3 = C.SURFACE
+duyuruTitleBar.BorderSizePixel = 0
+duyuruTitleBar.ZIndex = 201
+duyuruTitleBar.Parent = duyuruFrame
+addCorner(duyuruTitleBar, 18)
+
+local duyuruTitleFill = Instance.new("Frame")
+duyuruTitleFill.Size = UDim2.new(1, 0, 0.5, 0)
+duyuruTitleFill.Position = UDim2.new(0, 0, 0.5, 0)
+duyuruTitleFill.BackgroundColor3 = C.SURFACE
+duyuruTitleFill.BorderSizePixel = 0
+duyuruTitleFill.ZIndex = 201
+duyuruTitleFill.Parent = duyuruTitleBar
+
+local duyuruDivider = Instance.new("Frame")
+duyuruDivider.Size = UDim2.new(1, 0, 0, 1)
+duyuruDivider.Position = UDim2.new(0, 0, 1, -1)
+duyuruDivider.BackgroundColor3 = Color3.fromRGB(255, 200, 60)
+duyuruDivider.BackgroundTransparency = 0.5
+duyuruDivider.BorderSizePixel = 0
+duyuruDivider.ZIndex = 202
+duyuruDivider.Parent = duyuruTitleBar
+
+local duyuruTitleLbl = Instance.new("TextLabel")
+duyuruTitleLbl.Size = UDim2.new(1, -60, 1, 0)
+duyuruTitleLbl.Position = UDim2.new(0, 18, 0, 0)
+duyuruTitleLbl.BackgroundTransparency = 1
+duyuruTitleLbl.Text = "📢 DUYURULAR"
+duyuruTitleLbl.TextColor3 = Color3.fromRGB(255, 200, 60)
+duyuruTitleLbl.TextSize = 17
+duyuruTitleLbl.Font = Enum.Font.GothamBold
+duyuruTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+duyuruTitleLbl.ZIndex = 202
+duyuruTitleLbl.Parent = duyuruTitleBar
+
+-- Kapatma butonu (ana paneldeki kırmızı dot ile aynı stil)
+local duyuruCloseBtn = Instance.new("TextButton")
+duyuruCloseBtn.Size = UDim2.new(0, 22, 0, 22)
+duyuruCloseBtn.Position = UDim2.new(1, -32, 0.5, -11)
+duyuruCloseBtn.BackgroundColor3 = Color3.fromRGB(255, 95, 87)
+duyuruCloseBtn.Text = ""
+duyuruCloseBtn.AutoButtonColor = false
+duyuruCloseBtn.ZIndex = 203
+duyuruCloseBtn.Parent = duyuruTitleBar
+addCorner(duyuruCloseBtn, 11)
+addStroke(duyuruCloseBtn, Color3.fromRGB(180, 40, 40), 1, 0.2)
+hookHover(duyuruCloseBtn,
+    Color3.fromRGB(255, 95, 87),
+    Color3.fromRGB(255, 95, 87):Lerp(Color3.fromRGB(255,255,255), 0.25))
+
+local duyuruCloseIcon = Instance.new("TextLabel")
+duyuruCloseIcon.Size = UDim2.new(1, 0, 1, 0)
+duyuruCloseIcon.BackgroundTransparency = 1
+duyuruCloseIcon.Text = "×"
+duyuruCloseIcon.TextColor3 = Color3.fromRGB(120, 30, 30)
+duyuruCloseIcon.TextSize = 14
+duyuruCloseIcon.Font = Enum.Font.GothamBold
+duyuruCloseIcon.TextTransparency = 1
+duyuruCloseIcon.ZIndex = 204
+duyuruCloseIcon.Parent = duyuruCloseBtn
+
+duyuruCloseBtn.MouseEnter:Connect(function()  tween(duyuruCloseIcon, EASE_FAST, {TextTransparency = 0}) end)
+duyuruCloseBtn.MouseLeave:Connect(function()  tween(duyuruCloseIcon, EASE_FAST, {TextTransparency = 1}) end)
+
+-- İçerik scroll alanı
+local duyuruScroll = Instance.new("ScrollingFrame")
+duyuruScroll.Size = UDim2.new(1, -20, 1, -62)
+duyuruScroll.Position = UDim2.new(0, 10, 0, 54)
+duyuruScroll.BackgroundTransparency = 1
+duyuruScroll.ScrollBarThickness = 4
+duyuruScroll.ScrollBarImageColor3 = Color3.fromRGB(255, 200, 60)
+duyuruScroll.BorderSizePixel = 0
+duyuruScroll.ZIndex = 201
+duyuruScroll.Parent = duyuruFrame
+
+local duyuruLayout = Instance.new("UIListLayout")
+duyuruLayout.Padding = UDim.new(0, 12)
+duyuruLayout.SortOrder = Enum.SortOrder.LayoutOrder
+duyuruLayout.Parent = duyuruScroll
+
+local duyuruPadding = Instance.new("UIPadding")
+duyuruPadding.PaddingTop = UDim.new(0, 8)
+duyuruPadding.PaddingBottom = UDim.new(0, 8)
+duyuruPadding.PaddingLeft = UDim.new(0, 4)
+duyuruPadding.PaddingRight = UDim.new(0, 4)
+duyuruPadding.Parent = duyuruScroll
+
+-- Güncelleme verileri
+local UPDATES = {
+    {
+        tarih = "25 Nisan 2026",
+        baslik = "🚀 Animasyon Güncellemesi",
+        maddeler = {
+            "Toggle butonlarına animasyon eklendi",
+            "TEMİZLE butonu arama kutusuyla aynı stile getirildi",
+            "ŞİMDİ TP AT butonu yeşile getirildi",
+            "Buton basma animasyonu sabit referanstan çalışacak şekilde düzeltildi",
+            "Oyuncu listesinde çift seçim rengi bugı yok edildi",
+            "ESP mesafe yazısı rengi magenta'ya çevrildi",
+            "ESP mesafe yazı boyutu 15'e ayarlandı",
+            "FLY modu takla atma bugı düzeltildi",
+            "Duyurular paneli eklendi",
+            "Mert Catir Cutur Gotunden Sikildi.",
+        },
+    },
+}
+
+-- Kart oluşturucu
+local function createUpdateCard(update, order)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.BackgroundColor3 = C.SURFACE2
+    card.BorderSizePixel = 0
+    card.LayoutOrder = order
+    card.ZIndex = 202
+    card.Parent = duyuruScroll
+    addCorner(card, 12)
+    addStroke(card, C.BORDER, 1.5)
+
+    local cardPad = Instance.new("UIPadding")
+    cardPad.PaddingTop    = UDim.new(0, 12)
+    cardPad.PaddingBottom = UDim.new(0, 12)
+    cardPad.PaddingLeft   = UDim.new(0, 14)
+    cardPad.PaddingRight  = UDim.new(0, 14)
+    cardPad.Parent = card
+
+    local cardLayout = Instance.new("UIListLayout")
+    cardLayout.Padding = UDim.new(0, 6)
+    cardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    cardLayout.Parent = card
+
+    -- Tarih etiketi
+    local tarihLbl = Instance.new("TextLabel")
+    tarihLbl.Size = UDim2.new(1, 0, 0, 20)
+    tarihLbl.BackgroundTransparency = 1
+    tarihLbl.Text = "🗓️  " .. update.tarih
+    tarihLbl.TextColor3 = Color3.fromRGB(255, 200, 60)
+    tarihLbl.TextSize = 12
+    tarihLbl.Font = Enum.Font.GothamBold
+    tarihLbl.TextXAlignment = Enum.TextXAlignment.Left
+    tarihLbl.LayoutOrder = 1
+    tarihLbl.ZIndex = 203
+    tarihLbl.Parent = card
+
+    -- Başlık
+    local baslikLbl = Instance.new("TextLabel")
+    baslikLbl.Size = UDim2.new(1, 0, 0, 0)
+    baslikLbl.AutomaticSize = Enum.AutomaticSize.Y
+    baslikLbl.BackgroundTransparency = 1
+    baslikLbl.Text = update.baslik
+    baslikLbl.TextColor3 = C.TEXT
+    baslikLbl.TextSize = 15
+    baslikLbl.Font = Enum.Font.GothamBold
+    baslikLbl.TextXAlignment = Enum.TextXAlignment.Left
+    baslikLbl.TextWrapped = true
+    baslikLbl.LayoutOrder = 2
+    baslikLbl.ZIndex = 203
+    baslikLbl.Parent = card
+
+    -- Ayırıcı çizgi
+    local sep = Instance.new("Frame")
+    sep.Size = UDim2.new(1, 0, 0, 1)
+    sep.BackgroundColor3 = C.BORDER
+    sep.BorderSizePixel = 0
+    sep.LayoutOrder = 3
+    sep.ZIndex = 203
+    sep.Parent = card
+
+    -- Maddeler
+    for i, madde in ipairs(update.maddeler) do
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 0)
+        row.AutomaticSize = Enum.AutomaticSize.Y
+        row.BackgroundTransparency = 1
+        row.LayoutOrder = 3 + i
+        row.ZIndex = 203
+        row.Parent = card
+
+        local rowLayout = Instance.new("UIListLayout")
+        rowLayout.FillDirection = Enum.FillDirection.Horizontal
+        rowLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+        rowLayout.Padding = UDim.new(0, 6)
+        rowLayout.Parent = row
+
+        local bullet = Instance.new("TextLabel")
+        bullet.Size = UDim2.new(0, 12, 0, 20)
+        bullet.BackgroundTransparency = 1
+        bullet.Text = "•"
+        bullet.TextColor3 = Color3.fromRGB(255, 200, 60)
+        bullet.TextSize = 14
+        bullet.Font = Enum.Font.GothamBold
+        bullet.TextXAlignment = Enum.TextXAlignment.Center
+        bullet.ZIndex = 204
+        bullet.Parent = row
+
+        local maddeLbl = Instance.new("TextLabel")
+        maddeLbl.Size = UDim2.new(1, -18, 0, 0)
+        maddeLbl.AutomaticSize = Enum.AutomaticSize.Y
+        maddeLbl.BackgroundTransparency = 1
+        maddeLbl.Text = madde
+        maddeLbl.TextColor3 = C.TEXT_MUTED
+        maddeLbl.TextSize = 13
+        maddeLbl.Font = Enum.Font.Gotham
+        maddeLbl.TextXAlignment = Enum.TextXAlignment.Left
+        maddeLbl.TextWrapped = true
+        maddeLbl.ZIndex = 204
+        maddeLbl.Parent = row
+    end
+
+    return card
+end
+
+for i, update in ipairs(UPDATES) do
+    createUpdateCard(update, i)
+end
+
+-- Canvas boyutunu otomatik ayarla
+duyuruLayout.Changed:Connect(function()
+    duyuruScroll.CanvasSize = UDim2.new(0, 0, 0, duyuruLayout.AbsoluteContentSize.Y + 20)
+end)
+
+-- Açma/kapama animasyonu
+local duyuruOpen = false
+
+local function openDuyuru()
+    if duyuruOpen then return end
+    duyuruOpen = true
+    duyuruFrame.Visible = true
+    duyuruFrame.BackgroundTransparency = 1
+    duyuruFrame.Position = UDim2.new(0.5, 0, 0.5, -30)
+    tween(duyuruFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        BackgroundTransparency = 0,
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+    })
+end
+
+local function closeDuyuru()
+    if not duyuruOpen then return end
+    duyuruOpen = false
+    tween(duyuruFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0.5, 0, 0.5, 30),
+    })
+    task.delay(0.32, function()
+        if not duyuruOpen then
+            duyuruFrame.Visible = false
+        end
+    end)
+end
+
+duyurularBtn.MouseButton1Click:Connect(openDuyuru)
+duyuruCloseBtn.MouseButton1Click:Connect(closeDuyuru)
+
 attachDrag(titleBar)
 attachDrag(bottomHandle)
 
@@ -1116,7 +1558,7 @@ searchBox.FocusLost:Connect(function() tween(sbStroke,EASE_FAST,{Color=C.BORDER}
 
 local clearBtn = Instance.new("TextButton")
 clearBtn.Size = UDim2.new(0.35, 0, 0, 42)
-clearBtn.BackgroundColor3 = C.BLUE
+clearBtn.BackgroundColor3 = C.SURFACE2
 clearBtn.Text = "TEMİZLE"
 clearBtn.TextTruncate = Enum.TextTruncate.AtEnd
 clearBtn.TextColor3 = Color3.fromRGB(255,255,255)
@@ -1125,8 +1567,10 @@ clearBtn.Font = Enum.Font.GothamBold
 clearBtn.AutoButtonColor = false
 clearBtn.Parent = searchContainer
 addCorner(clearBtn, 8)
-addGradient(clearBtn, C.ACCENT, C.ACCENT2, 135)
-hookHover(clearBtn, C.BLUE, C.BLUE_H)
+addStroke(clearBtn, C.BORDER, 1.5)
+hookHover(clearBtn, C.SURFACE2, C.SURFACE2:Lerp(Color3.fromRGB(255,255,255), 0.12))
+btnBaseSize[clearBtn] = clearBtn.Size
+btnBasePos[clearBtn]  = clearBtn.Position
 hookPress(clearBtn)
 
 local playerListFrame = Instance.new("ScrollingFrame")
@@ -1176,9 +1620,13 @@ local function makeToggleBtn(parent, size, pos, text)
     btn.TextTruncate = Enum.TextTruncate.AtEnd
     btn.Font = Enum.Font.GothamBold
     btn.AutoButtonColor = false
+    btn.ClipsDescendants = true   -- ripple için
     btn.Parent = parent
     addCorner(btn, 8)
-    addStroke(btn, C.BORDER, 1, 0.3)
+    local s = addStroke(btn, C.BORDER, 1, 0.3)
+    btnStrokeRef[btn] = s
+    btnBaseSize[btn]  = size
+    btnBasePos[btn]   = pos
     hookPress(btn)
     return btn
 end
@@ -1188,25 +1636,12 @@ local viewBtn = makeToggleBtn(selectedPanel,
 local autoTPBtn = makeToggleBtn(selectedPanel,
     UDim2.new(0.9,0,0,36), UDim2.new(0.05,0,0,86), "⚡ AUTO TP KAPALI")
 
-local manualTPBtn = Instance.new("TextButton")
-manualTPBtn.Size = UDim2.new(0.9,0,0,36)
-manualTPBtn.Position = UDim2.new(0.05,0,0,127)
-manualTPBtn.BackgroundColor3 = C.BLUE
-manualTPBtn.Text = "🚀 ŞİMDİ TP AT"
-manualTPBtn.TextColor3 = Color3.fromRGB(255,255,255)
-manualTPBtn.TextSize = 14
-manualTPBtn.TextTruncate = Enum.TextTruncate.AtEnd
-manualTPBtn.Font = Enum.Font.GothamBold
-manualTPBtn.AutoButtonColor = false
-manualTPBtn.Parent = selectedPanel
-addCorner(manualTPBtn, 8)
-addGradient(manualTPBtn, C.ACCENT, C.ACCENT2, 135)
-addStroke(manualTPBtn, C.ACCENT, 1, 0.4)
-hookHover(manualTPBtn, C.BLUE, C.BLUE_H)
-hookPress(manualTPBtn)
+local manualTPBtn = makeToggleBtn(selectedPanel,
+    UDim2.new(0.9,0,0,36), UDim2.new(0.05,0,0,127), "🚀 ŞİMDİ TP AT")
 
 hookToggleHover(viewBtn)
 hookToggleHover(autoTPBtn)
+hookToggleHover(manualTPBtn)
 
 -- ── Sağ bölüm ──────────────────────────────────────────────────────────────
 local rightSection = Instance.new("Frame")
@@ -1249,10 +1684,14 @@ for i, data in ipairs(buttonData) do
     btn.TextTruncate = Enum.TextTruncate.AtEnd
     btn.Font = Enum.Font.GothamBold
     btn.AutoButtonColor = false
+    btn.ClipsDescendants = true   -- ripple için
     btn.Parent = rightSection
     addCorner(btn, 12)
 
-    addStroke(btn, C.BORDER, 1.5, 0.2)
+    local s = addStroke(btn, C.BORDER, 1.5, 0.2)
+    btnStrokeRef[btn] = s
+    btnBaseSize[btn]  = btn.Size
+    btnBasePos[btn]   = btn.Position
     hookToggleHover(btn)
     hookPress(btn)
 
@@ -1453,10 +1892,10 @@ local function createESP(plr)
         distLabel.Position = UDim2.new(0,0,0.55,0)
         distLabel.BackgroundTransparency = 1
         distLabel.Text = "0m"
-        distLabel.TextColor3 = Color3.fromRGB(180,220,255)
+        distLabel.TextColor3 = Color3.fromRGB(255, 80, 220)
         distLabel.TextStrokeColor3 = Color3.fromRGB(0,0,0)
-        distLabel.TextStrokeTransparency = 0.3
-        distLabel.TextSize = 14
+        distLabel.TextStrokeTransparency = 0
+        distLabel.TextSize = 15
         distLabel.TextTruncate = Enum.TextTruncate.AtEnd
         distLabel.Font = Enum.Font.Gotham
         distLabel.TextXAlignment = Enum.TextXAlignment.Center
@@ -1538,48 +1977,36 @@ local function toggleFly()
         if bv then bv:Destroy(); bv = nil end
         if bg then bg:Destroy(); bg = nil end
         if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
-        -- Humanoid'i tekrar aktif et
         local hum = character and character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.PlatformStand = false end
+        if hum then
+            hum.PlatformStand = false
+            hum.WalkSpeed = walkSpeed
+        end
     else
         flying = true
         flyBtn.Text = "✈️ FLY AÇIK"
         setToggleColor(flyBtn, C.RED)
 
-        -- Humanoid'i dondur (yerçekimi etkisini kes)
         local hum = character and character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.PlatformStand = true end
 
-        -- LinearVelocity (modern API)
-        local attachment = Instance.new("Attachment")
-        attachment.Name = "MidyeFlyAttach"
-        attachment.Parent = root
+        -- BodyVelocity (klasik API — takla sorunu yok)
+        bv = Instance.new("BodyVelocity")
+        bv.Name       = "MidyeFlyBV"
+        bv.Velocity   = Vector3.new(0, 0, 0)
+        bv.MaxForce   = Vector3.new(1e5, 1e5, 1e5)
+        bv.Parent     = root
 
-        bv = Instance.new("LinearVelocity")
-        bv.Name = "MidyeFlyLV"
-        bv.Attachment0 = attachment
-        bv.MaxForce = math.huge
-        bv.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-        bv.VectorVelocity = Vector3.new(0, 0, 0)
-        bv.Parent = root
-
-        -- AlignOrientation (modern API) — sadece yatay yön, takla yok
-        local attachCam = Instance.new("Attachment")
-        attachCam.Name = "MidyeFlyAttachCam"
-        attachCam.Parent = workspace.CurrentCamera
-
-        bg = Instance.new("AlignOrientation")
-        bg.Name = "MidyeFlyAO"
-        bg.Attachment0 = attachment
-        bg.Attachment1 = attachCam
-        bg.MaxTorque = math.huge
-        bg.MaxAngularVelocity = math.huge
-        bg.Responsiveness = 50
-        bg.Parent = root
+        -- BodyGyro — sadece yatay yönü kilitler, pitch/roll sıfır kalır
+        bg = Instance.new("BodyGyro")
+        bg.Name        = "MidyeFlyBG"
+        bg.MaxTorque   = Vector3.new(1e5, 1e5, 1e5)
+        bg.P           = 1e4
+        bg.D           = 500
+        bg.CFrame      = CFrame.new(root.Position)
+        bg.Parent      = root
 
         flyConnection = RunService.Heartbeat:Connect(function()
             if not flying then return end
-            -- Karakter değiştiyse temizle
             if not root or not root.Parent then
                 flying = false
                 flyBtn.Text = "✈️ FLY KAPALI"
@@ -1589,6 +2016,7 @@ local function toggleFly()
                 if flyConnection then flyConnection:Disconnect(); flyConnection = nil end
                 return
             end
+
             local cam = workspace.CurrentCamera
             local dir = Vector3.new(0, 0, 0)
             if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
@@ -1598,17 +2026,25 @@ local function toggleFly()
             if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then dir += Vector3.new(0, 1, 0) end
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.new(0, 1, 0) end
             if dir.Magnitude > 0 then dir = dir.Unit end
-            bv.VectorVelocity = dir * flySpeed
 
-            -- Sadece yatay yönü takip et (pitch/roll sıfır) — takla atmayı önler
+            bv.Velocity = dir * flySpeed
+
+            -- Karakterin yönünü kameraya göre yatay düzlemde hizala (pitch/roll yok)
             local look = cam.CFrame.LookVector
             local flatLook = Vector3.new(look.X, 0, look.Z)
             if flatLook.Magnitude > 0.01 then
-                flatLook = flatLook.Unit
-            else
-                flatLook = Vector3.new(0, 0, -1)
+                bg.CFrame = CFrame.new(root.Position, root.Position + flatLook)
             end
-            attachCam.CFrame = CFrame.lookAt(Vector3.new(0,0,0), flatLook)
+
+            -- Humanoid'in WalkSpeed'ini hareket varsa flySpeed'e ayarla
+            -- (koşma animasyonu için Humanoid'i PlatformStand yapmıyoruz)
+            if hum then
+                if dir.Magnitude > 0 then
+                    hum.WalkSpeed = flySpeed
+                else
+                    hum.WalkSpeed = 0
+                end
+            end
         end)
     end
 end
@@ -1665,7 +2101,7 @@ local function refreshPlayers(filter)
                 end
             end)
             btn.MouseButton1Click:Connect(function()
-                if selectedButton then
+                if selectedButton and selectedButton ~= btn then
                     tween(selectedButton, EASE_FAST, {BackgroundColor3 = C.SURFACE2})
                     local old = selectedButton:FindFirstChildOfClass("UIStroke")
                     if old then tween(old, EASE_FAST, {Color = C.BORDER}) end
@@ -1677,6 +2113,10 @@ local function refreshPlayers(filter)
                 updateSelectedUI()
                 applyView()
             end)
+            -- Seçili oyuncunun yeni oluşturulan butonunu kaydet
+            if selectedPlayer == plr then
+                selectedButton = btn
+            end
         end
     end
     playerListFrame.CanvasSize = UDim2.new(0,0,0, playerListLayout.AbsoluteContentSize.Y + 10)
