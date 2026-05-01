@@ -559,7 +559,7 @@ task.spawn(function()
         Position = origBtnPos, BackgroundTransparency = 0,
     })
 end)
-local BLACKLIST_URL = "https://raw.githubusercontent.com/Sherlockkn/midyescriptt/main/blacklist.txt"
+local BLACKLIST_URL = "https://raw.githubusercontent.com/Sherlockkn/midyescript/main/blacklist.txt"
 local blacklistedKeys = {}
 local blacklistLoaded = false
 task.spawn(function()
